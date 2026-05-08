@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
-const DB_PATH = process.env.NODE_ENV === 'production' ? '/data/audition.db' : 'audition.db';
+const DB_PATH = process.env.DB_PATH || 'audition.db';
 const db = new Database(DB_PATH);
 
 // WALモード: 読み込みと書き込みを並行処理できる
