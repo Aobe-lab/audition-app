@@ -22,10 +22,11 @@ export function Judge() {
       if (res.ok) {
         const data = await res.json();
         setEvents(Array.isArray(data) ? data : []);
-      } else {
+      } else if (res.status === 401) {
         safeStorage.removeItem('judgeToken');
         navigate('/login?role=judge');
       }
+      // 401以外のエラー（503など）はトークンを消さずそのまま待つ
     } catch (err) {
       console.error('Failed to fetch events:', err);
       setEvents([]);
@@ -42,20 +43,18 @@ export function Judge() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 relative overflow-hidden">
-      {/* Stage Lighting Effects */}
       <div className="fixed top-0 left-1/4 w-[500px] h-[500px] bg-indigo-600/10 rounded-full blur-[120px] -translate-y-1/2 mix-blend-screen pointer-events-none" />
       <div className="fixed bottom-0 right-1/4 w-[500px] h-[500px] bg-fuchsia-600/10 rounded-full blur-[120px] translate-y-1/2 mix-blend-screen pointer-events-none" />
 
-      {/* Floating Instrument Icons */}
-      <motion.div 
-        animate={{ y: [0, -15, 0], rotate: [0, 5, 0] }} 
+      <motion.div
+        animate={{ y: [0, -15, 0], rotate: [0, 5, 0] }}
         transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
         className="fixed top-1/4 left-[5%] text-zinc-800/30 hidden lg:block pointer-events-none"
       >
         <Music className="w-32 h-32" />
       </motion.div>
-      <motion.div 
-        animate={{ y: [0, 15, 0], rotate: [0, -5, 0] }} 
+      <motion.div
+        animate={{ y: [0, 15, 0], rotate: [0, -5, 0] }}
         transition={{ duration: 7, repeat: Infinity, ease: "easeInOut", delay: 1 }}
         className="fixed bottom-1/4 right-[5%] text-zinc-800/30 hidden lg:block pointer-events-none"
       >
@@ -70,7 +69,7 @@ export function Judge() {
           </div>
           <div className="flex items-center gap-2">
             {isAdmin && (
-              <button 
+              <button
                 onClick={() => navigate('/admin')}
                 className="text-sm px-3 py-1.5 bg-fuchsia-600/20 text-fuchsia-400 hover:bg-fuchsia-600/30 hover:text-fuchsia-300 rounded-md flex items-center gap-1.5 transition-colors border border-fuchsia-500/20"
               >
