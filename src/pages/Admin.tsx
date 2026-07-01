@@ -14,25 +14,19 @@ export function Admin() {
   const [copied, setCopied] = useState(false);
   const navigate = useNavigate();
 
+  // useEffectは1つだけ
   useEffect(() => {
     fetchEvents();
     fetchAdminInfo();
     fetchOrCreateJudgeQr();
   }, []);
 
-  // ログアウト：adminToken・judgeQrTokenを削除してログイン画面へ
   const handleLogout = () => {
     if (!confirm('ログアウトしますか？')) return;
     safeStorage.removeItem('adminToken');
     safeStorage.removeItem('judgeQrToken');
     navigate('/login?role=admin', { replace: true });
   };
-
-  useEffect(() => {
-    fetchEvents();
-    fetchAdminInfo();
-    fetchOrCreateJudgeQr();
-  }, []);
 
   const fetchAdminInfo = async () => {
     try {
@@ -48,9 +42,7 @@ export function Admin() {
     }
   };
 
-  // 審査員入場用QRトークンを発行してURLを生成する
   const fetchOrCreateJudgeQr = async () => {
-    // 一度発行したQRトークンはlocalStorageにキャッシュ（毎回APIを叩かないため）
     const cached = safeStorage.getItem('judgeQrToken');
     if (cached) {
       setJudgeQrUrl(`${window.location.origin}/enter/${cached}`);
@@ -79,14 +71,11 @@ export function Admin() {
       if (res.ok) {
         const data = await res.json();
         setEvents(Array.isArray(data) ? data : []);
-      } else {
-        if (res.status === 401 || res.status === 403) {
-          safeStorage.removeItem('adminToken');
-          navigate('/login?role=admin');
-        } else {
-          setEvents([]);
-        }
+      } else if (res.status === 401 || res.status === 403) {
+        safeStorage.removeItem('adminToken');
+        navigate('/login?role=admin');
       }
+      // それ以外のエラー（503など）はトークンを消さずそのまま待つ
     } catch (err) {
       console.error('Failed to fetch events:', err);
       setEvents([]);
@@ -181,7 +170,6 @@ export function Admin() {
               </div>
             )}
 
-            {/* 審査員用QRコード */}
             <div className="bg-zinc-900/60 p-6 rounded-2xl shadow-lg border border-zinc-800 backdrop-blur-md">
               <h2 className="text-lg font-bold text-zinc-100 mb-1 flex items-center gap-2 tracking-wide">
                 <QrCode className="w-5 h-5 text-indigo-400" />
