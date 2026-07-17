@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, CheckCircle2, Send, Music, Speaker, Mic2, RotateCcw } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Send, Music, Speaker, Mic2, RotateCcw, X } from 'lucide-react';
 import { safeStorage } from '../utils/storage';
 
 export function JudgeEvent() {
@@ -16,20 +16,54 @@ export function JudgeEvent() {
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
   const [restored, setRestored] = useState(false);
+
   const draftKey = `draft_${id}`;
   const isFirstRender = useRef(true);
+  const sessionIdRef = useRef<string>('');
+  const submittedRef = useRef(false);
+  const presencePingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const getToken = () =>
     safeStorage.getItem('judgeToken') || safeStorage.getItem('adminToken') || '';
 
+  const sendPresencePing = async (isSubmitted: boolean) => {
+    if (!sessionIdRef.current) return;
+    try {
+      await fetch(`/api/events/${id}/presence`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
+        body: JSON.stringify({ sessionId: sessionIdRef.current, submitted: isSubmitted })
+      });
+    } catch (_) {}
+  };
+
+  // presence管理
   useEffect(() => {
-    // 投票済みチェック
+    const key = `presence_session_${id}`;
+    let sid = safeStorage.getItem(key);
+    if (!sid) {
+      sid = crypto.randomUUID();
+      safeStorage.setItem(key, sid);
+    }
+    sessionIdRef.current = sid;
+
+    sendPresencePing(false);
+
+    presencePingIntervalRef.current = setInterval(() => {
+      if (!submittedRef.current) sendPresencePing(false);
+    }, 30000);
+
+    return () => {
+      if (presencePingIntervalRef.current) clearInterval(presencePingIntervalRef.current);
+    };
+  }, [id]);
+
+  useEffect(() => {
     if (safeStorage.getItem(`submitted_${id}`)) {
       setSubmitted(true);
       setLoading(false);
       return;
     }
-    // 下書き復元
     try {
       const saved = safeStorage.getItem(draftKey);
       if (saved) {
@@ -42,11 +76,9 @@ export function JudgeEvent() {
         }
       }
     } catch (_) {}
-    // イベント取得
     fetchEventData();
   }, [id]);
 
-  // 入力変化時に自動保存
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return; }
     if (submitted) return;
@@ -62,11 +94,7 @@ export function JudgeEvent() {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.status !== 'open') {
-          setLoading(false);
-          navigate('/judge');
-          return;
-        }
+        if (data.status !== 'open') { setLoading(false); navigate('/judge'); return; }
         setEvent(data);
         setBands(data.bands || []);
       } else {
@@ -98,6 +126,14 @@ export function JudgeEvent() {
     setComments(prev => ({ ...prev, [bandId]: comment }));
   };
 
+const handleClearRank = (bandId: string) => {
+  setRankings(prev => {
+    const next = { ...prev };
+    delete next[bandId];
+    return next;
+  });
+};
+
   const handleReset = () => {
     if (!confirm('入力内容をすべてリセットしますか？')) return;
     setRankings({});
@@ -124,6 +160,9 @@ export function JudgeEvent() {
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `エラー(${res.status})`); }
       try { safeStorage.removeItem(draftKey); } catch (_) {}
       safeStorage.setItem(`submitted_${id}`, 'true');
+      submittedRef.current = true;
+      sendPresencePing(true);
+      if (presencePingIntervalRef.current) clearInterval(presencePingIntervalRef.current);
       setSubmitted(true);
     } catch (err: any) {
       setError(err.message || 'ネットワークエラーが発生しました。再度送信ボタンを押してください。');
@@ -140,9 +179,7 @@ export function JudgeEvent() {
   if (!event) return (
     <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center gap-4">
       <p className="text-zinc-400">イベントを読み込めませんでした</p>
-      <button onClick={() => navigate('/judge')} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-500">
-        ダッシュボードに戻る
-      </button>
+      <button onClick={() => navigate('/judge')} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-500">ダッシュボードに戻る</button>
     </div>
   );
 
@@ -156,11 +193,8 @@ export function JudgeEvent() {
           <CheckCircle2 className="w-10 h-10 text-emerald-400" />
         </div>
         <h2 className="text-2xl font-bold text-zinc-100 mb-4">投票完了</h2>
-        <p className="text-zinc-400 mb-8">ご協力ありがとうございました。<br/>結果は管理者が集計します。</p>
-        <button onClick={() => navigate('/judge')}
-          className="w-full py-4 px-4 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-500 transition-all">
-          ダッシュボードに戻る
-        </button>
+        <p className="text-zinc-400 mb-8">ご協力ありがとうございました。<br />結果は管理者が集計します。</p>
+        <button onClick={() => navigate('/judge')} className="w-full py-4 px-4 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-500 transition-all">ダッシュボードに戻る</button>
       </motion.div>
     </div>
   );
@@ -169,14 +203,8 @@ export function JudgeEvent() {
     <div className="min-h-screen bg-zinc-950 pb-28 text-zinc-100 relative overflow-hidden">
       <div className="fixed top-0 left-1/4 w-[500px] h-[500px] bg-indigo-600/10 rounded-full blur-[120px] -translate-y-1/2 mix-blend-screen pointer-events-none" />
       <div className="fixed bottom-0 right-1/4 w-[500px] h-[500px] bg-fuchsia-600/10 rounded-full blur-[120px] translate-y-1/2 mix-blend-screen pointer-events-none" />
-      <motion.div animate={{ y: [0, -15, 0] }} transition={{ duration: 6, repeat: Infinity }}
-        className="fixed top-1/4 left-[5%] text-zinc-800/30 hidden lg:block pointer-events-none">
-        <Music className="w-32 h-32" />
-      </motion.div>
-      <motion.div animate={{ y: [0, 15, 0] }} transition={{ duration: 7, repeat: Infinity, delay: 1 }}
-        className="fixed bottom-1/4 right-[5%] text-zinc-800/30 hidden lg:block pointer-events-none">
-        <Speaker className="w-40 h-40" />
-      </motion.div>
+      <motion.div animate={{ y: [0, -15, 0] }} transition={{ duration: 6, repeat: Infinity }} className="fixed top-1/4 left-[5%] text-zinc-800/30 hidden lg:block pointer-events-none"><Music className="w-32 h-32" /></motion.div>
+      <motion.div animate={{ y: [0, 15, 0] }} transition={{ duration: 7, repeat: Infinity, delay: 1 }} className="fixed bottom-1/4 right-[5%] text-zinc-800/30 hidden lg:block pointer-events-none"><Speaker className="w-40 h-40" /></motion.div>
 
       <AnimatePresence>
         {restored && (
@@ -190,9 +218,7 @@ export function JudgeEvent() {
       <header className="bg-zinc-900/80 border-b border-zinc-800 sticky top-0 z-30 backdrop-blur-md">
         <div className="max-w-3xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <button onClick={() => navigate('/judge')} className="p-2 -ml-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-full transition-colors">
-              <ArrowLeft className="w-5 h-5" />
-            </button>
+            <button onClick={() => navigate('/judge')} className="p-2 -ml-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-full transition-colors"><ArrowLeft className="w-5 h-5" /></button>
             <h1 className="text-lg font-bold text-zinc-100 truncate max-w-[200px] sm:max-w-md">{event.name}</h1>
           </div>
           <button onClick={handleReset} className="text-xs text-zinc-500 hover:text-zinc-300 flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-zinc-800 transition-colors">
@@ -211,9 +237,7 @@ export function JudgeEvent() {
         </div>
 
         {error && (
-          <div className="bg-red-900/30 border border-red-500/30 text-red-400 p-4 rounded-xl text-sm font-bold text-center">
-            {error}
-          </div>
+          <div className="bg-red-900/30 border border-red-500/30 text-red-400 p-4 rounded-xl text-sm font-bold text-center">{error}</div>
         )}
 
         <div className="space-y-4">
@@ -222,21 +246,27 @@ export function JudgeEvent() {
               className={`bg-zinc-900/60 p-5 rounded-2xl shadow-lg border backdrop-blur-md transition-all ${rankings[band.id] ? 'border-indigo-500/50' : 'border-zinc-800'}`}>
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <h3 className="font-bold text-zinc-100 text-xl flex items-center gap-2">
-                    <Mic2 className="w-5 h-5 text-indigo-400" />{band.name}
-                  </h3>
-                  <div className="flex items-center gap-3 bg-zinc-950/50 p-2 rounded-xl border border-zinc-800">
-                    <span className="text-sm font-bold text-zinc-400">順位:</span>
-                    <select value={rankings[band.id] || ''} onChange={(e) => handleRankChange(band.id, Number(e.target.value))}
-                      className="w-24 px-3 py-2 rounded-lg border border-zinc-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-zinc-100 bg-zinc-800">
-                      <option value="" disabled>-</option>
-                      {Array.from({ length: bands.length }, (_, i) => i + 1).map(num => (
-                        <option key={num} value={num} disabled={Object.values(rankings).includes(num) && rankings[band.id] !== num}>
-                          {num}位
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <h3 className="font-bold text-zinc-100 text-xl flex items-center gap-2"><Mic2 className="w-5 h-5 text-indigo-400" />{band.name}</h3>
+                 <div className="flex items-center gap-3 bg-zinc-950/50 p-2 rounded-xl border border-zinc-800">
+  <span className="text-sm font-bold text-zinc-400">順位:</span>
+  <select value={rankings[band.id] || ''} onChange={(e) => handleRankChange(band.id, Number(e.target.value))}
+    className="w-24 px-3 py-2 rounded-lg border border-zinc-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-zinc-100 bg-zinc-800">
+    <option value="" disabled>-</option>
+    {Array.from({ length: bands.length }, (_, i) => i + 1).map(num => (
+      <option key={num} value={num} disabled={Object.values(rankings).includes(num) && rankings[band.id] !== num}>{num}位</option>
+    ))}
+  </select>
+  {rankings[band.id] && (
+    <button
+      type="button"
+      onClick={() => handleClearRank(band.id)}
+      className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
+      title="順位をリセット"
+    >
+      <X className="w-4 h-4" />
+    </button>
+  )}
+</div>
                 </div>
                 <div>
                   <label className="block text-sm font-bold text-zinc-400 mb-2">講評</label>
@@ -252,18 +282,11 @@ export function JudgeEvent() {
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-zinc-900/90 border-t border-zinc-800 backdrop-blur-xl z-40">
           <div className="max-w-3xl mx-auto flex items-center justify-between gap-4">
             <div className="text-sm font-bold text-zinc-400 bg-zinc-950 px-4 py-2 rounded-lg border border-zinc-800">
-              <span className={Object.keys(rankings).length === bands.length ? 'text-emerald-400' : 'text-zinc-100'}>
-                {Object.keys(rankings).length}
-              </span>/{bands.length} 入力済
+              <span className={Object.keys(rankings).length === bands.length ? 'text-emerald-400' : 'text-zinc-100'}>{Object.keys(rankings).length}</span>/{bands.length} 入力済
             </div>
             <button onClick={handleSubmit} disabled={Object.keys(rankings).length !== bands.length || sending}
               className="flex items-center gap-2 py-3 px-8 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-indigo-500/20">
-              {sending ? (
-                <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                </svg>
-              ) : <Send className="w-5 h-5" />}
+              {sending ? <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg> : <Send className="w-5 h-5" />}
               {sending ? '送信中...' : '投票を送信'}
             </button>
           </div>
