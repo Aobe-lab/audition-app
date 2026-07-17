@@ -40,7 +40,8 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS bands (
       id TEXT PRIMARY KEY,
       event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-      name TEXT NOT NULL
+      name TEXT NOT NULL,
+      sort_order INTEGER DEFAULT 0
     )
   `);
   await pool.query(`
@@ -53,8 +54,17 @@ async function initDb() {
       submission_group TEXT NOT NULL
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS judge_presence (
+      session_id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      last_seen TIMESTAMP DEFAULT NOW(),
+      submitted BOOLEAN DEFAULT FALSE
+    )
+  `);
   await pool.query(`ALTER TABLE events ADD COLUMN IF NOT EXISTS admin_id INTEGER DEFAULT 1`);
   await pool.query(`ALTER TABLE votes ADD COLUMN IF NOT EXISTS comment TEXT`);
+  await pool.query(`ALTER TABLE bands ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`);
   console.log('DB initialized');
 }
 
@@ -246,7 +256,7 @@ async function startServer() {
       const adminId = req.user.role === 'admin' ? req.user.id : req.user.adminId;
       const eventResult = await pool.query('SELECT * FROM events WHERE id = $1 AND admin_id = $2', [req.params.id, adminId]);
       if (!eventResult.rows[0]) return res.status(404).json({ error: 'Event not found' });
-      const bandsResult = await pool.query('SELECT * FROM bands WHERE event_id = $1', [req.params.id]);
+      const bandsResult = await pool.query('SELECT * FROM bands WHERE event_id = $1 ORDER BY sort_order ASC, name ASC', [req.params.id]);
       res.json({ ...eventResult.rows[0], bands: bandsResult.rows });
     } catch {
       res.status(500).json({ error: 'サーバーエラー' });
@@ -295,9 +305,37 @@ async function startServer() {
       const eventResult = await pool.query('SELECT id FROM events WHERE id = $1 AND admin_id = $2', [req.params.id, req.user.id]);
       if (!eventResult.rows[0]) return res.status(404).json({ error: 'Event not found' });
       const bandId = crypto.randomUUID();
-      await pool.query('INSERT INTO bands (id, event_id, name) VALUES ($1, $2, $3)', [bandId, req.params.id, name.trim().slice(0, 50)]);
+      const countResult = await pool.query('SELECT COUNT(*) as cnt FROM bands WHERE event_id = $1', [req.params.id]);
+      const sortOrder = parseInt(countResult.rows[0].cnt);
+      await pool.query('INSERT INTO bands (id, event_id, name, sort_order) VALUES ($1, $2, $3, $4)', [bandId, req.params.id, name.trim().slice(0, 50), sortOrder]);
       invalidateCache(req.params.id);
       res.json({ id: bandId, event_id: req.params.id, name });
+    } catch {
+      res.status(500).json({ error: 'サーバーエラー' });
+    }
+  });
+
+  app.put('/api/events/:id/bands/reorder', authenticateAdmin, async (req: any, res) => {
+    const { bandIds } = req.body;
+    if (!Array.isArray(bandIds)) return res.status(400).json({ error: '不正なリクエストです' });
+    try {
+      const eventResult = await pool.query('SELECT id FROM events WHERE id = $1 AND admin_id = $2', [req.params.id, req.user.id]);
+      if (!eventResult.rows[0]) return res.status(404).json({ error: 'Event not found' });
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        for (let i = 0; i < bandIds.length; i++) {
+          await client.query('UPDATE bands SET sort_order = $1 WHERE id = $2 AND event_id = $3', [i, bandIds[i], req.params.id]);
+        }
+        await client.query('COMMIT');
+        invalidateCache(req.params.id);
+        res.json({ success: true });
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
     } catch {
       res.status(500).json({ error: 'サーバーエラー' });
     }
@@ -355,6 +393,38 @@ async function startServer() {
     }
   });
 
+  // ---- 参加者プレゼンス ----
+  app.post('/api/events/:id/presence', authenticateJudge, async (req: any, res) => {
+    const { sessionId, submitted } = req.body;
+    if (!sessionId) return res.status(400).json({ error: 'sessionIdが必要です' });
+    try {
+      await pool.query(`
+        INSERT INTO judge_presence (session_id, event_id, last_seen, submitted)
+        VALUES ($1, $2, NOW(), $3)
+        ON CONFLICT (session_id) DO UPDATE SET last_seen = NOW(), submitted = EXCLUDED.submitted
+      `, [sessionId, req.params.id, submitted || false]);
+      res.json({ success: true });
+    } catch {
+      res.status(500).json({ error: 'サーバーエラー' });
+    }
+  });
+
+  app.get('/api/events/:id/presence', authenticateAdmin, async (req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE submitted = true)::int AS submitted,
+          COUNT(*) FILTER (WHERE submitted = false AND last_seen > NOW() - INTERVAL '2 minutes')::int AS in_progress,
+          (COUNT(*) FILTER (WHERE submitted = true) + COUNT(*) FILTER (WHERE submitted = false AND last_seen > NOW() - INTERVAL '2 minutes'))::int AS total
+        FROM judge_presence
+        WHERE event_id = $1
+      `, [req.params.id]);
+      res.json(result.rows[0]);
+    } catch {
+      res.status(500).json({ error: 'サーバーエラー' });
+    }
+  });
+
   // ---- 集計結果 ----
   app.get('/api/events/:id/results', authenticateAdmin, async (req, res) => {
     const eventId = req.params.id;
@@ -363,7 +433,7 @@ async function startServer() {
     if (cached && now - cached.timestamp < CACHE_TTL_MS) return res.json(cached.data);
 
     try {
-      const bandsResult = await pool.query('SELECT id, name FROM bands WHERE event_id = $1', [eventId]);
+      const bandsResult = await pool.query('SELECT id, name FROM bands WHERE event_id = $1 ORDER BY sort_order ASC, name ASC', [eventId]);
       const bands = bandsResult.rows as any[];
       const votesResult = await pool.query('SELECT band_id, rank, comment FROM votes WHERE event_id = $1', [eventId]);
       const votes = votesResult.rows as any[];
