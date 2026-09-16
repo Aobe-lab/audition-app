@@ -78,7 +78,10 @@ export function AdminEvent() {
       const res = await fetch(`/api/events/${id}/results`, {
         headers: { 'Authorization': `Bearer ${getToken()}` }
       });
-      if (res.ok) setResults(Array.isArray(await res.json()) ? await res.clone().json() : []);
+      if (res.ok) {
+        const data = await res.json();
+        setResults(Array.isArray(data) ? data : []);
+      }
     } catch (err) { console.error(err); }
   };
 
@@ -106,9 +109,12 @@ export function AdminEvent() {
   const handleManualReload = async () => {
     setReloading(true);
     await Promise.all([
-      fetch(`/api/events/${id}/results`, { headers: { 'Authorization': `Bearer ${getToken()}` } }).then(r => r.ok ? r.json() : null).then(d => d && setResults(Array.isArray(d) ? d : [])),
-      fetch(`/api/events/${id}/detailed-votes`, { headers: { 'Authorization': `Bearer ${getToken()}` } }).then(r => r.ok ? r.json() : null).then(d => d && setDetailedVotes(Array.isArray(d) ? d : [])),
-      fetch(`/api/events/${id}/presence`, { headers: { 'Authorization': `Bearer ${getToken()}` } }).then(r => r.ok ? r.json() : null).then(d => d && setPresence(d)),
+      fetch(`/api/events/${id}/results`, { headers: { 'Authorization': `Bearer ${getToken()}` } })
+        .then(r => r.ok ? r.json() : null).then(d => d && setResults(Array.isArray(d) ? d : [])),
+      fetch(`/api/events/${id}/detailed-votes`, { headers: { 'Authorization': `Bearer ${getToken()}` } })
+        .then(r => r.ok ? r.json() : null).then(d => d && setDetailedVotes(Array.isArray(d) ? d : [])),
+      fetch(`/api/events/${id}/presence`, { headers: { 'Authorization': `Bearer ${getToken()}` } })
+        .then(r => r.ok ? r.json() : null).then(d => d && setPresence(d)),
     ]);
     setReloading(false);
   };
@@ -171,17 +177,29 @@ export function AdminEvent() {
     if (res.ok) navigate('/admin');
   };
 
+  // 演者向けコピー：順番をシャッフルして審査員番号を非表示にする
   const handleCopyComments = (result: any) => {
-    const lines: string[] = [];
-    detailedVotes.forEach((voteGroup, index) => {
+    const entries: { rank: number; comment: string }[] = [];
+    detailedVotes.forEach((voteGroup) => {
       const vote = voteGroup.votes.find((v: any) => v.band_name === result.band_name);
       if (vote && vote.comment) {
-        lines.push(`審査員${index + 1}　${vote.rank}位：${vote.comment}`);
+        entries.push({ rank: vote.rank, comment: vote.comment });
       }
     });
-    if (lines.length === 0) { alert('講評がありません'); return; }
-    navigator.clipboard.writeText(`${result.band_name}への講評:\n\n${lines.join('\n\n')}`);
-    alert('講評をクリップボードにコピーしました');
+    if (entries.length === 0) { alert('講評がありません'); return; }
+
+    // Fisher-Yatesシャッフルで順番をランダム化
+    const shuffled = [...entries];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    // 演者向け：審査員番号なし・順位のみ表示
+    const text = `${result.band_name}への講評:\n\n` +
+      shuffled.map(e => `${e.rank}位評価：${e.comment}`).join('\n\n');
+    navigator.clipboard.writeText(text);
+    alert('講評をクリップボードにコピーしました（順番はランダム化されています）');
   };
 
   const handleCopyAllResults = () => {
@@ -358,20 +376,24 @@ export function AdminEvent() {
                         <td className="py-3 px-4 text-right font-mono font-bold text-zinc-400">{result.total_score}</td>
                         <td className="py-3 px-4">
                           {(() => {
-                            const commentVotes = detailedVotes.filter(vg => vg.votes.some((v: any) => v.band_name === result.band_name && v.comment));
+                            const commentVotes = detailedVotes.filter(vg =>
+                              vg.votes.some((v: any) => v.band_name === result.band_name && v.comment)
+                            );
                             return commentVotes.length > 0 ? (
                               <div className="flex flex-col gap-2">
                                 <div className="flex items-center justify-between">
                                   <span className="text-xs font-bold text-zinc-500 flex items-center gap-1"><MessageSquare className="w-3 h-3" />{commentVotes.length}件の講評</span>
-                                  <button onClick={() => handleCopyComments(result)} className="text-xs font-bold flex items-center gap-1 text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 px-2 py-1 rounded-md transition-colors border border-indigo-500/20"><Copy className="w-3 h-3" />コピー</button>
+                                  {/* 演者向けコピー：シャッフル済み・審査員番号なし */}
+                                  <button onClick={() => handleCopyComments(result)} className="text-xs font-bold flex items-center gap-1 text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 px-2 py-1 rounded-md transition-colors border border-indigo-500/20"><Copy className="w-3 h-3" />演者向けコピー</button>
                                 </div>
+                                {/* 管理者向け表示：審査員番号・順位あり・送信順 */}
                                 <div className="max-h-40 overflow-y-auto pr-1 space-y-2">
                                   {detailedVotes.map((voteGroup, index) => {
                                     const vote = voteGroup.votes.find((v: any) => v.band_name === result.band_name);
                                     if (!vote || !vote.comment) return null;
                                     return (
                                       <div key={index} className="bg-zinc-950/50 p-2 rounded border border-zinc-800">
-                                        <span className="text-xs font-bold text-zinc-500">審査員{index + 1}　{vote.rank}位</span>
+                                        <span className="text-xs font-bold text-zinc-500">審査員{index + 1}　{vote.rank}位評価</span>
                                         <p className="text-sm text-zinc-300 mt-1">{vote.comment}</p>
                                       </div>
                                     );
