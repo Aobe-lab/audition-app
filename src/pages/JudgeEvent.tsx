@@ -3,6 +3,64 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowLeft, CheckCircle2, Send, Music, Speaker, Mic2, RotateCcw, X } from 'lucide-react';
 import { safeStorage } from '../utils/storage';
+// 講評の入力欄（日本語の変換中に文字が崩れないようにするための部品）
+function CommentBox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [text, setText] = useState(value);
+  const textRef = useRef(value);    // いま入力欄に入っている文章
+  const sentRef = useRef(value);    // 親に渡し済みの文章
+  const composing = useRef(false);  // 変換中（下線が付いた状態）かどうか
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  const flush = () => {
+    if (textRef.current !== sentRef.current) {
+      sentRef.current = textRef.current;
+      onChangeRef.current(textRef.current);
+    }
+  };
+
+  // リセットで親の中身が空になったときだけ、入力欄も空にする
+  useEffect(() => {
+    if (value === '' && sentRef.current !== '') {
+      sentRef.current = '';
+      textRef.current = '';
+      setText('');
+    }
+  }, [value]);
+
+  // 画面のどこかを押す直前・画面を離れる直前に、未反映の文章を親へ渡す
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === 'hidden') flush(); };
+    document.addEventListener('pointerdown', flush, true);
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      document.removeEventListener('pointerdown', flush, true);
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, []);
+
+  return (
+    <textarea
+      value={text}
+      onChange={(e) => {
+        textRef.current = e.target.value;
+        setText(e.target.value);
+        if (!composing.current) flush();
+      }}
+      onCompositionStart={() => { composing.current = true; }}
+      onCompositionEnd={(e) => {
+        composing.current = false;
+        textRef.current = e.currentTarget.value;
+        flush();
+      }}
+      onBlur={() => { composing.current = false; flush(); }}
+      placeholder="バンドへの講評やアドバイスを入力してください"
+      className="w-full px-4 py-3 rounded-xl border border-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-y min-h-[100px] bg-zinc-950/50 text-zinc-100 placeholder-zinc-600"
+    />
+  );
+}
 
 export function JudgeEvent() {
   const { id } = useParams();
@@ -243,7 +301,7 @@ const handleClearRank = (bandId: string) => {
         <div className="space-y-4">
           {bands.map((band) => (
             <motion.div key={band.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-              className={`bg-zinc-900/60 p-5 rounded-2xl shadow-lg border backdrop-blur-md transition-all ${rankings[band.id] ? 'border-indigo-500/50' : 'border-zinc-800'}`}>
+              className={`bg-zinc-900/60 p-5 rounded-2xl shadow-lg border transition-all ${rankings[band.id] ? 'border-indigo-500/50' : 'border-zinc-800'}`}>
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <h3 className="font-bold text-zinc-100 text-xl flex items-center gap-2"><Mic2 className="w-5 h-5 text-indigo-400" />{band.name}</h3>
@@ -270,9 +328,7 @@ const handleClearRank = (bandId: string) => {
                 </div>
                 <div>
                   <label className="block text-sm font-bold text-zinc-400 mb-2">講評</label>
-                  <textarea value={comments[band.id] || ''} onChange={(e) => handleCommentChange(band.id, e.target.value)}
-                    placeholder="バンドへの講評やアドバイスを入力してください"
-                    className="w-full px-4 py-3 rounded-xl border border-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-y min-h-[100px] bg-zinc-950/50 text-zinc-100 placeholder-zinc-600" />
+                 <CommentBox value={comments[band.id] || ''} onChange={(v) => handleCommentChange(band.id, v)} />
                 </div>
               </div>
             </motion.div>
